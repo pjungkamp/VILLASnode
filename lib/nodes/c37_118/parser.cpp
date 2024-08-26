@@ -5,19 +5,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <arpa/inet.h>
 #include <cmath>
+
+#include <arpa/inet.h>
+
 #include <villas/exceptions.hpp>
 #include <villas/nodes/c37_118/parser.hpp>
 #include <villas/utils.hpp>
 
-using namespace villas::node::c37_118;
-using namespace villas::node::c37_118::parser;
+namespace villas::node::c37_118 {
 
 // Sample CRC routine taken from IEEE Std C37.118.2-2011 Annex B
-//
-// TODO: Is this code license compatible to Apache 2.0?
-uint16_t parser::calculate_crc(const unsigned char *frame, uint16_t size) {
+uint16_t calculate_crc(const unsigned char *frame, uint16_t size) {
   uint16_t crc = 0xFFFF;
   uint16_t temp;
   uint16_t quick;
@@ -34,14 +33,6 @@ uint16_t parser::calculate_crc(const unsigned char *frame, uint16_t size) {
   }
 
   return crc;
-}
-
-std::optional<Frame> Parser::deserialize(const unsigned char *buffer,
-                                         std::size_t length,
-                                         const Config *config) {
-  de_cursor = buffer;
-  de_end = buffer + length;
-  return try_deserialize_frame(config);
 }
 
 std::vector<unsigned char> Parser::serialize(const Frame &frame,
@@ -67,16 +58,19 @@ int16_t Parser::deserialize_int16_t() { return deserialize_uint16_t(); }
 
 float Parser::deserialize_float() {
   uint32_t raw = deserialize_uint32_t();
-  return *(float *)&raw;
+  return std::bit_cast<float>(raw);
 }
 
 std::string Parser::deserialize_name1() {
   std::string value(16, 0);
   de_copy<char>(value.data(), 16);
+  if (auto pos = value.find_last_not_of(" "); pos != std::string::npos)
+    value.resize(pos + 1);
   return value;
 }
 
-std::complex<float> Parser::deserialize_phasor(uint16_t format, const PhasorInfo &phinfo) {
+std::complex<float> Parser::deserialize_phasor(uint16_t format,
+                                               const PhasorInfo &phinfo) {
   switch (format & 0x3) {
   case 0x0: {
     auto real = static_cast<float>(deserialize_int16_t()) * phinfo.scale();
@@ -155,8 +149,8 @@ float Parser::deserialize_analog(uint16_t format, const AnalogInfo &aninfo) {
 
 uint16_t Parser::deserialize_digital(const DigitalInfo &dginfo) {
   auto normal = dginfo.dgunit >> 16;
-  auto valid = dginfo.dgunit & 0xFF;
-  return (deserialize_uint16_t() ^ normal) & valid;
+  auto valid = dginfo.dgunit & 0xFFFF;
+  return (deserialize_uint16_t() & valid) ^ normal;
 }
 
 PmuData Parser::deserialize_pmu_data(const PmuConfig &pmu_config) {
@@ -177,7 +171,7 @@ PmuData Parser::deserialize_pmu_data(const PmuConfig &pmu_config) {
   return {stat, phasor, freq, dfreq, analog, digital};
 }
 
-PmuConfig Parser::deserialize_pmu_config_simple() {
+PmuConfig Parser::deserialize_pmu_config() {
   auto stn = deserialize_name1();
   auto idcode = deserialize_uint16_t();
   auto format = deserialize_uint16_t();
@@ -206,19 +200,15 @@ PmuConfig Parser::deserialize_pmu_config_simple() {
   return {stn, idcode, format, phinfo, aninfo, dginfo, fnom, cfgcnt};
 }
 
-Config Parser::deserialize_config_simple() {
+Config Parser::deserialize_config() {
   auto time_base = deserialize_uint32_t();
   std::vector<PmuConfig> pmus(deserialize_uint16_t());
   for (auto &pmu : pmus)
-    pmu = deserialize_pmu_config_simple();
+    pmu = deserialize_pmu_config();
   auto data_rate = deserialize_uint16_t();
 
   return Config{time_base, pmus, data_rate};
 }
-
-Config1 Parser::deserialize_config1() { return deserialize_config_simple(); }
-
-Config2 Parser::deserialize_config2() { return deserialize_config_simple(); }
 
 Data Parser::deserialize_data(const Config &config) {
   std::vector<PmuData> pmus;
@@ -230,30 +220,34 @@ Data Parser::deserialize_data(const Config &config) {
 }
 
 Header Parser::deserialize_header() {
-  auto data = std::string(de_cursor, de_end);
+  auto data = std::string(&de_buffer[de_cursor], &de_buffer[de_end]);
+  de_cursor = de_end;
 
   return {data};
 }
 
 Command Parser::deserialize_command() {
-  auto cmd = deserialize_uint16_t();
-  auto ext = std::vector(de_cursor, de_end);
+  auto cmd = static_cast<Command::Type>(deserialize_uint16_t());
+  auto ext = std::vector(&de_buffer[de_cursor], &de_buffer[de_end]);
+  de_cursor = de_end;
 
   return {cmd, ext};
 }
 
-std::optional<Frame> Parser::try_deserialize_frame(const Config *config) {
-  auto de_begin = de_cursor;
-  if (de_end - de_begin < 4)
+std::optional<Frame> Parser::deserialize(const Config *config) {
+  de_cursor = 0;
+  de_end = de_buffer.size();
+  if (de_end < 4)
     return std::nullopt;
 
   auto sync = deserialize_uint16_t();
   auto framesize = deserialize_uint16_t();
 
-  if (de_end - de_begin < framesize)
+  if (de_end < framesize)
     return std::nullopt;
 
-  de_end = de_begin + framesize - sizeof(uint16_t);
+  de_end = framesize - sizeof(uint16_t);
+  de_parsed = framesize;
   auto idcode = deserialize_uint16_t();
   auto soc = deserialize_uint32_t();
   auto fracsec = deserialize_uint32_t();
@@ -262,32 +256,33 @@ std::optional<Frame> Parser::try_deserialize_frame(const Config *config) {
     throw RuntimeError{"c37_118: invalid SYNC"};
 
   uint16_t version = sync & 0xF;
-  Frame::Variant message;
+  Frame::Message message;
   switch (sync & 0x70) {
   case 0x00:
     if (config)
-      message = deserialize_data(*config);
+      message =
+          Frame::Message::make<Frame::Type::DATA>(deserialize_data(*config));
     break;
   case 0x10:
-    message = deserialize_header();
+    message = Frame::Message::make<Frame::Type::HEADER>(deserialize_header());
     break;
   case 0x20:
-    message = deserialize_config1();
+    message = Frame::Message::make<Frame::Type::CONFIG1>(deserialize_config());
     break;
   case 0x30:
-    message = deserialize_config2();
+    message = Frame::Message::make<Frame::Type::CONFIG2>(deserialize_config());
     break;
   case 0x40:
-    message = deserialize_command();
+    message = Frame::Message::make<Frame::Type::COMMAND>(deserialize_command());
     break;
   default:
     throw RuntimeError{"c37_118: unsupported frame type"};
   }
 
   de_cursor = de_end;
-  de_end += sizeof(uint16_t);
+  de_end = de_parsed;
   auto crc = deserialize_uint16_t();
-  auto expected_crc = calculate_crc(de_begin, framesize - sizeof(crc));
+  auto expected_crc = calculate_crc(de_buffer.data(), framesize - sizeof(crc));
   if (crc != expected_crc)
     throw RuntimeError{"c37_118: checksum mismatch"};
 
@@ -314,12 +309,15 @@ void Parser::serialize_float(const float &value) {
 }
 
 void Parser::serialize_name1(const std::string &value) {
-  std::string copy = value;
-  copy.resize(16, ' ');
-  se_copy(value.data(), 16);
+  std::array<char, 16> name;
+  std::memset(name.data(), ' ', name.size());
+  std::copy(cbegin(value), cbegin(value) + std::min(value.size(), name.size()),
+            begin(name));
+  se_copy(name.data(), name.size());
 }
 
-void Parser::serialize_phasor(const std::complex<float> &value, uint16_t format, const PhasorInfo &phinfo) {
+void Parser::serialize_phasor(const std::complex<float> &value, uint16_t format,
+                              const PhasorInfo &phinfo) {
   switch (format & 0x3) {
   case 0x0: {
     serialize_int16_t(static_cast<int16_t>(value.real() / phinfo.scale()));
@@ -385,7 +383,8 @@ void Parser::serialize_dfreq(const float &value, uint16_t format) {
   }
 }
 
-void Parser::serialize_analog(const float &value, uint16_t format, const AnalogInfo &aninfo) {
+void Parser::serialize_analog(const float &value, uint16_t format,
+                              const AnalogInfo &aninfo) {
   switch (format & 0x4) {
   case 0x0: {
     serialize_int16_t(static_cast<int16_t>(value / aninfo.scale()));
@@ -402,13 +401,15 @@ void Parser::serialize_analog(const float &value, uint16_t format, const AnalogI
   }
 }
 
-void Parser::serialize_digital(const uint16_t &value, const DigitalInfo &dginfo) {
+void Parser::serialize_digital(const uint16_t &value,
+                               const DigitalInfo &dginfo) {
   auto normal = dginfo.dgunit >> 16;
   auto valid = dginfo.dgunit & 0xFF;
   return serialize_uint16_t((value ^ normal) & valid);
 }
 
-void Parser::serialize_pmu_data(const PmuData &value, const PmuConfig &pmu_config) {
+void Parser::serialize_pmu_data(const PmuData &value,
+                                const PmuConfig &pmu_config) {
   if (value.phasor.size() != pmu_config.phinfo.size())
     throw RuntimeError{"c37_118: [phasor] expected [{}], got [{}]",
                        pmu_config.phinfo.size(), value.phasor.size()};
@@ -432,7 +433,7 @@ void Parser::serialize_pmu_data(const PmuData &value, const PmuConfig &pmu_confi
     serialize_digital(value.digital[i], pmu_config.dginfo[i]);
 }
 
-void Parser::serialize_pmu_config_simple(const PmuConfig &value) {
+void Parser::serialize_pmu_config(const PmuConfig &value) {
   serialize_name1(value.stn);
   serialize_uint16_t(value.idcode);
   serialize_uint16_t(value.format);
@@ -459,26 +460,18 @@ void Parser::serialize_pmu_config_simple(const PmuConfig &value) {
   serialize_uint16_t(value.cfgcnt);
 }
 
-void Parser::serialize_config_simple(const Config &value) {
+void Parser::serialize_config(const Config &value) {
   serialize_uint32_t(value.time_base);
   serialize_uint16_t(value.pmus.size());
   for (auto &pmu : value.pmus)
-    serialize_pmu_config_simple(pmu);
+    serialize_pmu_config(pmu);
   serialize_uint16_t(value.data_rate);
-}
-
-void Parser::serialize_config1(const Config1 &value) {
-  serialize_config_simple(value);
-}
-
-void Parser::serialize_config2(const Config2 &value) {
-  serialize_config_simple(value);
 }
 
 void Parser::serialize_data(const Data &value, const Config &config) {
   if (value.pmus.size() != config.pmus.size())
-    throw RuntimeError{"c37_118: [pmus] expected {}, got {}", config.pmus.size(),
-                       value.pmus.size()};
+    throw RuntimeError{"c37_118: [pmus] expected {}, got {}",
+                       config.pmus.size(), value.pmus.size()};
 
   for (uint16_t i = 0; i < value.pmus.size(); i++)
     serialize_pmu_data(value.pmus[i], config.pmus[i]);
@@ -489,13 +482,14 @@ void Parser::serialize_header(const Header &value) {
 }
 
 void Parser::serialize_command(const Command &value) {
-  serialize_uint16_t(value.cmd);
+  serialize_uint16_t(static_cast<uint16_t>(value.cmd));
   se_copy(value.ext.data(), value.ext.size());
 }
 
 void Parser::serialize_frame(const Frame &value, const Config *config) {
   auto version = 1;
-  uint16_t sync = 0xAA00 | ((value.message.index()) << 4) | version;
+  uint16_t sync =
+      0xAA00 | (static_cast<int>(value.message.tag()) << 4) | version;
 
   serialize_uint16_t(sync);
   serialize_uint16_t(0); // framesize placeholder
@@ -503,23 +497,23 @@ void Parser::serialize_frame(const Frame &value, const Config *config) {
   serialize_uint32_t(value.soc);
   serialize_uint32_t(value.fracsec);
 
-  std::visit(villas::utils::overloaded{
-                 [&](const Data &data) {
-                   if (config) serialize_data(data, *config);
-                   else throw RuntimeError{"c37_118: [frame] missing configuration for data frame"};
-                 },
-                 [&](const Header &header) { serialize_header(header); },
-                 [&](const Config1 &config1) { serialize_config1(config1); },
-                 [&](const Config2 &config2) { serialize_config2(config2); },
-                 [&](const Command &command) { serialize_command(command); },
-                 [](std::monostate) {
-                   throw RuntimeError{"c37_118: [frame] missing message"};
-                 },
-             },
-             value.message);
+  value.message.visit(villas::utils::overloaded{
+      [&](const Data &data) {
+        if (config)
+          serialize_data(data, *config);
+        else
+          throw RuntimeError{
+              "c37_118: [frame] missing configuration for data frame"};
+      },
+      [&](const Header &header) { serialize_header(header); },
+      [&](const Config &config) { serialize_config(config); },
+      [&](const Command &command) { serialize_command(command); },
+  });
 
   auto framesize = htons(se_buffer.size() + sizeof(uint16_t));
   std::memcpy(se_buffer.data() + sizeof(sync), &framesize, sizeof(framesize));
   auto crc = calculate_crc(se_buffer.data(), se_buffer.size());
   serialize_uint16_t(crc);
 }
+
+} // namespace villas::node::c37_118

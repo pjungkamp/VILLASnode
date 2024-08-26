@@ -13,7 +13,7 @@
 #include <villas/nodes/c37_118.hpp>
 #include <villas/utils.hpp>
 
-using namespace villas::node::c37_118::parser;
+using namespace villas::node::c37_118;
 
 // cppcheck-suppress syntaxError
 ParameterizedTestParameters(c37_118, parser) {
@@ -85,19 +85,19 @@ ParameterizedTest(criterion::parameters<unsigned char> *param, c37_118,
       .data_rate = 50,
   };
 
-  Parser parser{};
+  Parser parser{param->data(), param->size()};
 
-  auto frame = parser.deserialize(param->data(), param->size(), &config);
+  auto frame = parser.deserialize(&config);
   cr_assert(frame.has_value());
   cr_assert(frame->framesize == param->size());
 
-  if (auto *c = std::get_if<Config2>(&frame->message)) {
-    cr_assert((*c)->pmus[0].phinfo.size() == config.pmus[0].phinfo.size());
-    cr_assert((*c)->pmus[0].aninfo.size() == config.pmus[0].aninfo.size());
-    cr_assert((*c)->pmus[0].dginfo.size() == config.pmus[0].dginfo.size());
+  if (auto *c = frame->message.get_if<Frame::Type::CONFIG2>()) {
+    cr_assert(c->pmus[0].phinfo.size() == config.pmus[0].phinfo.size());
+    cr_assert(c->pmus[0].aninfo.size() == config.pmus[0].aninfo.size());
+    cr_assert(c->pmus[0].dginfo.size() == config.pmus[0].dginfo.size());
   }
 
-  if (auto *d = std::get_if<Data>(&frame->message)) {
+  if (auto *d = frame->message.get_if<Frame::Type::DATA>()) {
     cr_assert(d->pmus[0].phasor.size() == config.pmus[0].phinfo.size());
   }
 

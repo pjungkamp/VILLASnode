@@ -442,8 +442,13 @@ protected:
     }
 #endif // WITH_NODE_WEBSOCKET
 
-    if (reverse)
-      node->reverse();
+    if (reverse) {
+      ret = node->reverse();
+      if (ret)
+        throw RuntimeError(
+            "Failed to reverse configuration for node {}: reason={}",
+            node->getName(), ret);
+    }
 
     ret = node->getFactory()->start(&sn);
     if (ret)
