@@ -53,6 +53,7 @@ set(LIB_SRC
     socket_addr.cpp
     stats.cpp
     super_node.cpp
+    tagged_union.cpp
 )
 
 if(WITH_WEB)
