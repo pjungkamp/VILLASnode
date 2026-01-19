@@ -8,10 +8,8 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <optional>
 #include <stdexcept>
-#include <type_traits>
 #include <utility>
 
 #include <jansson.h>
@@ -315,48 +313,6 @@ inline bool Value::boolean() const {
   return json_boolean(ptr.get());
 }
 
-template <typename V> auto Value::visit(V &&visitor) const {
-  switch (json_typeof(ptr.get())) {
-  case JSON_OBJECT:
-    return std::invoke(visitor, object());
-  case JSON_ARRAY:
-    return std::invoke(visitor, array());
-  case JSON_STRING:
-    return std::invoke(visitor, string());
-  case JSON_INTEGER:
-    return std::invoke(visitor, integer());
-  case JSON_REAL:
-    return std::invoke(visitor, real());
-  case JSON_TRUE:
-    return std::invoke(visitor, std::true_type{});
-  case JSON_FALSE:
-    return std::invoke(visitor, std::false_type{});
-  case JSON_NULL:
-    return std::invoke(visitor, nullptr);
-  }
-}
-
-template <typename R, typename V> R Value::visit(V &&visitor) const {
-  switch (json_typeof(ptr.get())) {
-  case JSON_OBJECT:
-    return std::invoke(visitor, object());
-  case JSON_ARRAY:
-    return std::invoke(visitor, array());
-  case JSON_STRING:
-    return std::invoke(visitor, string());
-  case JSON_INTEGER:
-    return std::invoke(visitor, integer());
-  case JSON_REAL:
-    return std::invoke(visitor, real());
-  case JSON_TRUE:
-    return std::invoke(visitor, std::true_type{});
-  case JSON_FALSE:
-    return std::invoke(visitor, std::false_type{});
-  case JSON_NULL:
-    return std::invoke(visitor, nullptr);
-  }
-}
-
 template <typename B>
   requires std::same_as<B, bool>
 inline Value &Value::operator=(B b) {
@@ -486,14 +442,39 @@ inline Object::Sentinel Object::end() const noexcept {
   return std::default_sentinel;
 }
 
+inline bool Object::optionalValueIsEmpty(Value const &value) noexcept {
+  switch (value.type()) {
+    using enum type_t;
+  case JSON_OBJECT: {
+    return value.object().size() == 0;
+  } break;
+
+  case JSON_ARRAY: {
+    return value.array().size() == 0;
+  } break;
+
+  case JSON_STRING: {
+    return value.string().size() == 0;
+  } break;
+
+  case JSON_NULL: {
+    return true;
+  } break;
+
+  default: {
+    return false;
+  } break;
+  }
+}
+
 template <typename... T>
 inline Object Object::pack(Object::Binding<T>... bindings) {
   auto object = Object{};
 
   (..., [&](auto &binding) {
     auto value = jansson::pack(binding.value);
-    if (binding.required or not value.isNull())
-      object.set(binding.name, value);
+    if (binding.required or not optionalValueIsEmpty(value))
+      object.set(binding.name, std::move(value));
   }(bindings));
 
   return object;
@@ -505,7 +486,7 @@ inline void Object::unpack(Object::Binding<T>... bindings) const {
     if (binding.name != key)
       return false;
 
-    if (binding.required or not value.isNull()) {
+    if (binding.required or not optionalValueIsEmpty(value)) {
       jansson::unpack(binding.value, value);
       binding.required = false;
     }
@@ -754,15 +735,15 @@ template <std::floating_point T> inline Value jsonPack(T const &f) {
 template <std::floating_point T>
 inline void jsonUnpack(std::complex<T> &c, Value const &value) {
   T real = 0, imag = 0;
-  value.object().unpack(jansson::bind("real", real), //
-                        jansson::bind("imag", imag));
+  value.object().unpack(jansson::required("real", real),
+                        jansson::required("imag", imag));
   c = {real, imag};
 }
 
 template <std::floating_point T>
 inline Value jsonPack(std::complex<T> const &c) {
-  return jansson::Object::pack(jansson::bind("real", c.real()), //
-                               jansson::bind("imag", c.imag()));
+  return jansson::Object::pack(jansson::required("real", c.real()),
+                               jansson::required("imag", c.imag()));
 }
 
 template <typename T>

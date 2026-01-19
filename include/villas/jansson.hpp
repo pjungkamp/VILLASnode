@@ -34,13 +34,14 @@
  *     int age;
  *
  *     object.unpack(
- *       villas::jansson::bind("firstname", first, true),
- *       villas::jansson::bind("lastname", last, true),
- *       villas::jansson::bind("age", age));
+ *       villas::jansson::required("firstname", first),
+ *       villas::jansson::required("lastname", last),
+ *       villas::jansson::optional("age", age));
+ *
  *     auto packed = villas::jansson::Object::pack(
- *       villas::jansson::bind("firstname", first, true),
- *       villas::jansson::bind("lastname", last, true),
- *       villas::jansson::bind("age", age));
+ *       villas::jansson::required("firstname", first),
+ *       villas::jansson::required("lastname", last),
+ *       villas::jansson::optional("age", age));
  *
  *     assert(object == packed);
  *
@@ -65,8 +66,6 @@
  * in the namespace where the type is declared which is then found using ADL.
  * The Object::pack and Object::unpack functions make serializing struct-like types easy.
  *
- * Note: villas::jansson::bind defaults to `required = false`.
- *
  *     struct User {
  *       std::string name;
  *       int age;
@@ -75,18 +74,18 @@
  *
  *     villas::jansson::Value jsonPack(User const &user) {
  *       return villas::jansson::Object::pack(
- *         villas::jansson::bind("name", user.name, true),
- *         villas::jansson::bind("age", user.age, true),
- *         villas::jansson::bind("is_admin", user.is_admin));
+ *         villas::jansson::required("name", user.name),
+ *         villas::jansson::required("age", user.age),
+ *         villas::jansson::optional("is_admin", user.is_admin));
  *     }
  *
  *     static_assert(villas::jansson::packable<User>);
  *
  *     void jsonUnpack(User &user, villas::jansson::Value const &json) {
  *       json.object().unpack(
- *         villas::jansson::bind("name", user.name, true),
- *         villas::jansson::bind("age", user.age, true),
- *         villas::jansson::bind("is_admin", user.is_admin));
+ *         villas::jansson::required("name", user.name),
+ *         villas::jansson::required("age", user.age),
+ *         villas::jansson::optional("is_admin", user.is_admin));
  *     }
  *
  *     static_assert(villas::jansson::unpackable<User>);
@@ -258,10 +257,6 @@ public:
   double number() const;
   bool boolean() const;
 
-  template <typename V> auto visit(V &&visitor) const;
-
-  template <typename R, typename V> R visit(V &&visitor) const;
-
   Value &operator=(std::string_view s);
 
   template <typename I>
@@ -347,8 +342,18 @@ public:
   struct Binding {
     std::string_view name;
     T value;
-    bool required = true;
+    bool required;
   };
+
+  // check if a jansson::Value is considered empty for the purposes of packing or unpacking
+  // an optional value binding.
+  //
+  // a value is considered empty when it is one of the following:
+  // - an empty object (value.isObject() and value.object().size() == 0)
+  // - an empty array  (value.isArray() and value.array().size() == 0)
+  // - an empty string (value.isString() and value.string().size() == 0)
+  // - a null value    (value.isNull())
+  static bool optionalValueIsEmpty(Value const &value) noexcept;
 
   template <typename... T> static Object pack(Binding<T>... binding);
   template <typename... T> void unpack(Binding<T>... binding) const;
@@ -357,13 +362,27 @@ private:
   Value inner = object();
 };
 
-// helper for Object::pack and Object::unpack
+// create an Object::Binding for Object::pack and Object::unpack.
 template <typename T>
-inline auto bind(std::string_view key, T &&value, bool required = false) {
+inline auto binding(std::string_view key, T &&value, bool required) {
   if constexpr (std::is_rvalue_reference_v<T &&>)
     return Object::Binding<T const &>{key, value, required};
   else
     return Object::Binding<T &>{key, value, required};
+}
+
+// create a *required* Object::Binding for Object::pack and Object::unpack.
+//
+// this is an alias for jansson::bind with required = true
+template <typename T> inline auto required(std::string_view key, T &&value) {
+  return binding(key, std::forward<T>(value), true);
+}
+
+// create an *optional* Object::Binding for Object::pack and Object::unpack.
+//
+// this is an alias for jansson::bind with required = false
+template <typename T> inline auto optional(std::string_view key, T &&value) {
+  return binding(key, std::forward<T>(value), false);
 }
 
 class Array {
