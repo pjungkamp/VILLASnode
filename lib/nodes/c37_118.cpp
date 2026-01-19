@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <memory>
+#include <ranges>
 
 #include <fmt/core.h>
 #include <netdb.h>
@@ -18,12 +19,9 @@
 #include <villas/exceptions.hpp>
 #include <villas/nodes/c37_118.hpp>
 #include <villas/nodes/c37_118/parser.hpp>
+#include <villas/nodes/c37_118/types.hpp>
 #include <villas/socket_addr.hpp>
-#include <villas/utils.hpp>
-
-#include "villas/node_direction.hpp"
-#include "villas/nodes/c37_118/types.hpp"
-#include "villas/tagged_union.hpp"
+#include <villas/tagged_union.hpp>
 
 namespace villas::node::c37_118 {
 

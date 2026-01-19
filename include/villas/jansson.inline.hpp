@@ -7,11 +7,7 @@
 
 #pragma once
 
-#include <cstddef>
-#include <optional>
-#include <stdexcept>
-#include <utility>
-
+#include <fmt/core.h>
 #include <jansson.h>
 
 #include <villas/jansson.hpp>
@@ -81,62 +77,6 @@ inline Value &Value::operator=(Value &&other) noexcept {
 
 inline Value::~Value() noexcept { json_decref(ptr.get()); }
 
-inline Value Value::copy() { return Value::take(json_copy(ptr.get())); }
-
-inline Value Value::deepCopy() {
-  return Value::take(json_deep_copy(ptr.get()));
-}
-
-inline Value Value::fromString(std::string_view string, std::size_t flags) {
-  json_error_t err;
-  if (auto raw = json_loadb(string.data(), string.size(), flags, &err))
-    return Value{*raw};
-  else
-    throw parse_error{err};
-}
-
-inline std::string Value::toString(size_t flags) const {
-  return internal_error::check(json_dumps(ptr.get(), flags)).get();
-}
-
-inline Value Value::loadFromFileStream(std::FILE *file, std::size_t flags) {
-  json_error_t err;
-  if (auto raw = json_loadf(file, flags, &err))
-    return Value{*raw};
-  else
-    throw parse_error{err};
-}
-
-inline void Value::dumpToFileStream(std::FILE *file, size_t flags) const {
-  internal_error::check(json_dumpf(ptr.get(), file, flags));
-}
-
-inline Value Value::loadFromFileDescriptor(int fd, std::size_t flags) {
-  json_error_t err;
-  if (auto raw = json_loadfd(fd, flags, &err))
-    return Value{*raw};
-  else
-    throw parse_error{err};
-}
-
-inline void Value::dumpToFileDescriptor(int fd, size_t flags) const {
-  internal_error::check(json_dumpfd(ptr.get(), fd, flags));
-}
-
-inline Value Value::loadFromFilePath(std::filesystem::path const &path,
-                                     std::size_t flags) {
-  json_error_t err;
-  if (auto raw = json_load_file(path.c_str(), flags, &err))
-    return Value{*raw};
-  else
-    throw parse_error{err};
-}
-
-inline void Value::dumpToFilePath(std::filesystem::path const &path,
-                                  size_t flags) const {
-  internal_error::check(json_dump_file(ptr.get(), path.c_str(), flags));
-}
-
 template <typename Callback>
 inline Value Value::loadWithCallback(Callback cb, std::size_t flags) {
   struct Data {
@@ -167,7 +107,7 @@ inline Value Value::loadWithCallback(Callback cb, std::size_t flags) {
 }
 
 template <typename Callback>
-inline void Value::dumpWithCallback(Callback cb, size_t flags) const {
+inline void Value::dumpWithCallback(Callback cb, std::size_t flags) const {
   struct Data {
     Callback callback;
     std::exception_ptr exception;
@@ -189,8 +129,8 @@ inline void Value::dumpWithCallback(Callback cb, size_t flags) const {
   if (auto ret = json_dump_callback(ptr.get(), trampoline, opaque, flags);
       data.exception != nullptr)
     std::rethrow_exception(data.exception);
-  else
-    internal_error::check(ret);
+  else if (ret == -1)
+    throw internal_error{};
 }
 
 inline Value Value::take(json_t *owned_raw) {
@@ -265,7 +205,8 @@ inline std::string_view Value::string() const {
 
 inline Value &Value::operator=(std::string_view s) {
   if (json_is_string(ptr.get())) {
-    internal_error::check(json_string_setn(ptr.get(), s.data(), s.size()));
+    if (json_string_setn(ptr.get(), s.data(), s.size()) == -1)
+      throw internal_error{};
     return *this;
   }
   return *this = jansson::string(s);
@@ -363,13 +304,17 @@ inline Value Object::operator[](std::string_view key) const noexcept {
 }
 
 inline void Object::set(std::string_view key, Value const &val) {
-  internal_error::check(json_object_setn(inner.borrowRawPointer(), key.data(),
-                                         key.size(), val.borrowRawPointer()));
+  if (auto ret = json_object_setn(inner.borrowRawPointer(), key.data(),
+                                  key.size(), val.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::set(std::string_view key, Value &&val) {
-  internal_error::check(json_object_setn_new(
-      inner.borrowRawPointer(), key.data(), key.size(), val.takeRawPointer()));
+  if (auto ret = json_object_setn_new(inner.borrowRawPointer(), key.data(),
+                                      key.size(), val.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::del(std::string_view key) {
@@ -379,100 +324,88 @@ inline void Object::del(std::string_view key) {
 inline void Object::clear() { json_object_clear(inner.borrowRawPointer()); }
 
 inline void Object::update(Object const &other) {
-  internal_error::check(json_object_update(inner.borrowRawPointer(),
-                                           other.inner.borrowRawPointer()));
+  if (auto ret = json_object_update(inner.borrowRawPointer(),
+                                    other.inner.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::update(Object &&other) {
-  internal_error::check(json_object_update_new(inner.borrowRawPointer(),
-                                               other.inner.takeRawPointer()));
+  if (auto ret = json_object_update_new(inner.borrowRawPointer(),
+                                        other.inner.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::updateExisting(Object const &other) {
-  internal_error::check(json_object_update_existing(
-      inner.borrowRawPointer(), other.inner.borrowRawPointer()));
+  if (auto ret = json_object_update_existing(inner.borrowRawPointer(),
+                                             other.inner.borrowRawPointer());
+      ret == -1)
+    ;
 }
 
 inline void Object::updateExisting(Object &&other) {
-  internal_error::check(json_object_update_existing_new(
-      inner.borrowRawPointer(), other.inner.takeRawPointer()));
+  if (auto ret = json_object_update_existing_new(inner.borrowRawPointer(),
+                                                 other.inner.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::updateMissing(Object const &other) {
-  internal_error::check(json_object_update_missing(
-      inner.borrowRawPointer(), other.inner.borrowRawPointer()));
+  if (auto ret = json_object_update_missing(inner.borrowRawPointer(),
+                                            other.inner.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Object::updateMissing(Object &&other) {
-  internal_error::check(json_object_update_missing_new(
-      inner.borrowRawPointer(), other.inner.takeRawPointer()));
+  if (auto ret = json_object_update_missing_new(inner.borrowRawPointer(),
+                                                other.inner.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
-inline Object::Iterator::Iterator(Object const &obj) noexcept
+inline Object::iterator::iterator(Object const &obj) noexcept
     : obj(obj.inner.borrowRawPointer()),
       iter(json_object_iter(obj.inner.borrowRawPointer())) {}
 
-inline Object::Iterator::value_type
-Object::Iterator::operator*() const noexcept {
+inline Object::iterator::value_type
+Object::iterator::operator*() const noexcept {
   return {std::string_view{json_object_iter_key(iter),
                            json_object_iter_key_len(iter)},
           Value::borrow(*json_object_iter_value(iter))};
 }
 
-inline Object::Iterator &Object::Iterator::operator++() noexcept {
+inline Object::iterator &Object::iterator::operator++() noexcept {
   iter = json_object_iter_next(obj, iter);
   return *this;
 }
 
-inline Object::Iterator Object::Iterator::operator++(int) noexcept {
+inline Object::iterator Object::iterator::operator++(int) noexcept {
   auto old = *this;
   ++*this;
   return old;
 }
 
-inline bool operator==(Object::Iterator const &iterator,
-                       Object::Sentinel) noexcept {
+inline bool operator==(Object::iterator const &iterator,
+                       Object::sentinel) noexcept {
   return iterator.iter == nullptr;
 }
 
-inline Object::Iterator Object::begin() const noexcept {
-  return Iterator{*this};
+inline Object::iterator Object::begin() const noexcept {
+  return iterator{*this};
 }
-inline Object::Sentinel Object::end() const noexcept {
+
+inline Object::sentinel Object::end() const noexcept {
   return std::default_sentinel;
-}
-
-inline bool Object::optionalValueIsEmpty(Value const &value) noexcept {
-  switch (value.type()) {
-    using enum type_t;
-  case JSON_OBJECT: {
-    return value.object().size() == 0;
-  } break;
-
-  case JSON_ARRAY: {
-    return value.array().size() == 0;
-  } break;
-
-  case JSON_STRING: {
-    return value.string().size() == 0;
-  } break;
-
-  case JSON_NULL: {
-    return true;
-  } break;
-
-  default: {
-    return false;
-  } break;
-  }
 }
 
 template <typename... T>
 inline Object Object::pack(Object::Binding<T>... bindings) {
   auto object = Object{};
 
-  (..., [&](auto &binding) {
-    auto value = jansson::pack(binding.value);
+  (..., [&]<typename B>(Object::Binding<B> &binding) {
+    auto value = jansson::pack(std::forward<B>(binding.value), binding.name);
     if (binding.required or not optionalValueIsEmpty(value))
       object.set(binding.name, std::move(value));
   }(bindings));
@@ -482,12 +415,12 @@ inline Object Object::pack(Object::Binding<T>... bindings) {
 
 template <typename... T>
 inline void Object::unpack(Object::Binding<T>... bindings) const {
-  auto check = [](auto &binding, std::string_view key, Value const &value) {
+  auto check = []<typename B>(Object::Binding<B> &binding, std::string_view key, Value const &value) {
     if (binding.name != key)
       return false;
 
     if (binding.required or not optionalValueIsEmpty(value)) {
-      jansson::unpack(binding.value, value);
+      jansson::unpack(std::forward<B>(binding.value), value, binding.name);
       binding.required = false;
     }
 
@@ -545,56 +478,72 @@ inline Value Array::operator[](std::size_t index) const noexcept {
 }
 
 inline void Array::set(std::size_t index, Value const &value) {
-  internal_error::check(json_array_set(inner.borrowRawPointer(), index,
-                                       value.borrowRawPointer()));
+  if (auto ret = json_array_set(inner.borrowRawPointer(), index,
+                                value.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::set(std::size_t index, Value &&value) {
-  internal_error::check(json_array_set_new(inner.borrowRawPointer(), index,
-                                           value.takeRawPointer()));
+  if (auto ret = json_array_set_new(inner.borrowRawPointer(), index,
+                                    value.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::append(Value const &value) {
-  internal_error::check(
-      json_array_append(inner.borrowRawPointer(), value.borrowRawPointer()));
+  if (auto ret =
+          json_array_append(inner.borrowRawPointer(), value.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::append(Value &&value) {
-  internal_error::check(
-      json_array_append_new(inner.borrowRawPointer(), value.takeRawPointer()));
+  if (auto ret = json_array_append_new(inner.borrowRawPointer(),
+                                       value.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::insert(std::size_t index, Value const &value) {
-  internal_error::check(json_array_insert(inner.borrowRawPointer(), index,
-                                          value.borrowRawPointer()));
+  if (auto ret = json_array_insert(inner.borrowRawPointer(), index,
+                                   value.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::insert(std::size_t index, Value &&value) {
-  internal_error::check(json_array_insert_new(inner.borrowRawPointer(), index,
-                                              value.takeRawPointer()));
+  if (auto ret = json_array_insert_new(inner.borrowRawPointer(), index,
+                                       value.takeRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::remove(std::size_t index) {
-  internal_error::check(json_array_remove(inner.borrowRawPointer(), index));
+  if (auto ret = json_array_remove(inner.borrowRawPointer(), index); ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::clear(std::size_t index) {
-  internal_error::check(json_array_clear(inner.borrowRawPointer()));
+  if (auto ret = json_array_clear(inner.borrowRawPointer()); ret == -1)
+    throw internal_error{};
 }
 
 inline void Array::extend(Array const &other) {
-  internal_error::check(json_array_extend(inner.borrowRawPointer(),
-                                          other.inner.borrowRawPointer()));
+  if (auto ret = json_array_extend(inner.borrowRawPointer(),
+                                   other.inner.borrowRawPointer());
+      ret == -1)
+    throw internal_error{};
 }
 
-inline Array::Iterator::Iterator(Array const &arr, std::size_t start) noexcept
+inline Array::iterator::iterator(Array const &arr, std::size_t start) noexcept
     : arr(arr.inner.borrowRawPointer()), index(start) {}
 
-inline Value Array::Iterator::operator*() const noexcept {
+inline Value Array::iterator::operator*() const noexcept {
   return Value::borrow(json_array_get(arr, index));
 }
 
-inline Value Array::Iterator::operator[](difference_type n) const noexcept {
+inline Value Array::iterator::operator[](difference_type n) const noexcept {
   auto raw = json_array_get(arr, index + n);
   if (raw == nullptr)
     return jansson::null();
@@ -602,77 +551,77 @@ inline Value Array::Iterator::operator[](difference_type n) const noexcept {
   return Value::borrow(*raw);
 }
 
-inline Array::Iterator &Array::Iterator::operator++() noexcept {
+inline Array::iterator &Array::iterator::operator++() noexcept {
   ++index;
   return *this;
 }
 
-inline Array::Iterator Array::Iterator::operator++(int) noexcept {
+inline Array::iterator Array::iterator::operator++(int) noexcept {
   auto ret = *this;
   ++*this;
   return ret;
 }
 
-inline Array::Iterator &Array::Iterator::operator--() noexcept {
+inline Array::iterator &Array::iterator::operator--() noexcept {
   --index;
   return *this;
 }
 
-inline Array::Iterator Array::Iterator::operator--(int) noexcept {
+inline Array::iterator Array::iterator::operator--(int) noexcept {
   auto old = *this;
   --*this;
   return old;
 }
 
-inline Array::Iterator &
-Array::Iterator::operator+=(difference_type n) noexcept {
+inline Array::iterator &
+Array::iterator::operator+=(difference_type n) noexcept {
   index += n;
   return *this;
 }
 
-inline Array::Iterator &
-Array::Iterator::operator-=(difference_type n) noexcept {
+inline Array::iterator &
+Array::iterator::operator-=(difference_type n) noexcept {
   index -= n;
   return *this;
 }
 
-inline Array::Iterator operator+(Array::Iterator iter,
-                                 Array::Iterator::difference_type n) noexcept {
+inline Array::iterator operator+(Array::iterator iter,
+                                 Array::iterator::difference_type n) noexcept {
   return iter += n;
 }
 
-inline Array::Iterator operator+(Array::Iterator::difference_type n,
-                                 Array::Iterator iter) noexcept {
+inline Array::iterator operator+(Array::iterator::difference_type n,
+                                 Array::iterator iter) noexcept {
   return iter += n;
 }
 
-inline Array::Iterator operator-(Array::Iterator iter,
-                                 Array::Iterator::difference_type n) noexcept {
+inline Array::iterator operator-(Array::iterator iter,
+                                 Array::iterator::difference_type n) noexcept {
   return iter -= n;
 }
 
-inline Array::Iterator::difference_type
-operator-(Array::Iterator const &lhs, Array::Iterator const &rhs) noexcept {
+inline Array::iterator::difference_type
+operator-(Array::iterator const &lhs, Array::iterator const &rhs) noexcept {
   return lhs.index - rhs.index;
 }
 
-inline std::partial_ordering operator<=>(Array::Iterator const &lhs,
-                                         Array::Iterator const &rhs) noexcept {
+inline std::partial_ordering operator<=>(Array::iterator const &lhs,
+                                         Array::iterator const &rhs) noexcept {
   return lhs.arr != rhs.arr ? std::partial_ordering::unordered
                             : lhs.index <=> rhs.index;
 }
 
-inline bool operator==(Array::Iterator const &lhs,
-                       Array::Iterator const &rhs) noexcept {
+inline bool operator==(Array::iterator const &lhs,
+                       Array::iterator const &rhs) noexcept {
   return lhs.arr == rhs.arr and lhs.index == rhs.index;
 }
 
-inline Array::Iterator Array::begin() const noexcept {
-  return Iterator{*this, 0};
+inline Array::iterator Array::begin() const noexcept {
+  return iterator{*this, 0};
 }
 
-inline Array::Iterator Array::end() const noexcept {
-  return Iterator{*this, size()};
+inline Array::iterator Array::end() const noexcept {
+  return iterator{*this, size()};
 }
 
 inline void jsonUnpack(Value &v, Value const &value) { v = value; }
@@ -707,7 +656,7 @@ inline void jsonUnpack(bool &b, Value const &value) { b = value.boolean(); }
 
 inline Value jsonPack(bool const &b) { return jansson::boolean(b); }
 
-template <std::integral T> inline void jsonUnpack(T &i, Value const &value) {
+template <integral_strict T> inline void jsonUnpack(T &i, Value const &value) {
   auto val = value.integer();
   if (not std::in_range<T>(val))
     throw std::out_of_range{fmt::format("value {} is out of range for type",
@@ -715,7 +664,7 @@ template <std::integral T> inline void jsonUnpack(T &i, Value const &value) {
   i = val;
 }
 
-template <std::integral T> inline Value jsonPack(T const &i) {
+template <integral_strict T> inline Value jsonPack(T const &i) {
   if (not std::in_range<int_t>(i))
     throw std::out_of_range{fmt::format("value {} is out of range for type", i,
                                         typeid(int_t).name())};
@@ -759,28 +708,28 @@ template <typename T> inline Value jsonPack(std::optional<T> const &opt) {
 template <vector_like T> inline void jsonUnpack(T &vector, Value const &value) {
   auto array = value.array();
   vector.resize(array.size());
-  for (size_t i = 0; i < array.size(); ++i)
-    jansson::unpack(vector[i], array[i]);
+  for (std::size_t i = 0; i < array.size(); ++i)
+    jansson::unpack(vector[i], array[i], i);
 }
 
 template <vector_like T> inline Value jsonPack(T const &vector) {
   auto array = Array{};
   for (auto const &v : vector)
-    array.append(jansson::pack(v));
+    array.append(jansson::pack(v, array.size()));
   return array;
 }
 
 template <tuple_like T> inline void jsonUnpack(T &tuple, Value const &value) {
   auto array = value.array();
-  [&]<size_t... index>(std::index_sequence<index...>) {
-    (..., jansson::unpack(std::get<index>(tuple), array[index]));
+  [&]<std::size_t... index>(std::index_sequence<index...>) {
+    (..., jansson::unpack(std::get<index>(tuple), array[index], index));
   }(std::make_index_sequence<std::tuple_size_v<T>>());
 }
 
 template <tuple_like T> inline Value jsonPack(T const &tuple) {
   auto array = Array{};
-  [&]<size_t... index>(std::index_sequence<index...>) {
-    (..., array.append(jansson::pack(std::get<index>(tuple))));
+  [&]<std::size_t... index>(std::index_sequence<index...>) {
+    (..., array.append(jansson::pack(std::get<index>(tuple), index)));
   }(std::make_index_sequence<std::tuple_size_v<T>>());
   return array;
 }
@@ -788,13 +737,13 @@ template <tuple_like T> inline Value jsonPack(T const &tuple) {
 template <map_like T> inline void jsonUnpack(T &map, Value const &value) {
   map.clear();
   for (auto [key, val] : value.object())
-    jansson::unpack(map[typename T::key_type{key}], val);
+    jansson::unpack(map[typename T::key_type{key}], val, key);
 }
 
 template <map_like T> inline Value jsonPack(T &map) {
   auto object = Object{};
   for (auto const &[key, value] : map)
-    object.set(key, jansson::pack(value));
+    object.set(key, jansson::pack(value, key));
   return object;
 }
 

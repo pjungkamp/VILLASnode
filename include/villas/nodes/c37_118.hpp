@@ -27,14 +27,14 @@ namespace villas::node::c37_118 {
 class C37_118 final : public Node {
 private:
   struct Input final {
-    std::string addr;
-    uint16_t port;
+    std::string addr = "localhost";
+    uint16_t port = 4712;
     uint16_t idcode;
 
     friend void jsonUnpack(Input &output, jansson::Value const &json) {
-      json.object().unpack(jansson::bind("address", output.addr),
-                           jansson::bind("port", output.port),
-                           jansson::bind("idcode", output.idcode));
+      json.object().unpack(jansson::optional("address", output.addr),
+                           jansson::optional("port", output.port),
+                           jansson::required("idcode", output.idcode));
     }
 
     std::optional<Config> config;
@@ -52,16 +52,16 @@ private:
   } input;
 
   struct Output final {
-    std::string addr;
-    uint16_t port;
+    std::string addr = "localhost";
+    uint16_t port = 4712;
     uint16_t idcode;
     Config config;
 
     friend void jsonUnpack(Output &output, jansson::Value const &json) {
-      json.object().unpack(jansson::bind("address", output.addr),
-                           jansson::bind("port", output.port),
-                           jansson::bind("idcode", output.idcode),
-                           jansson::bind("config", output.config));
+      json.object().unpack(jansson::optional("address", output.addr),
+                           jansson::optional("port", output.port),
+                           jansson::required("idcode", output.idcode),
+                           jansson::required("config", output.config));
     }
 
     bool data_stream;

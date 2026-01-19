@@ -26,6 +26,7 @@ set(LIB_SRC
     config.cpp
     dumper.cpp
     format.cpp
+    jansson.cpp
     mapping.cpp
     mapping_list.cpp
     memory.cpp

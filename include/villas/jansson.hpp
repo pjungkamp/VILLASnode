@@ -91,11 +91,6 @@
  *     static_assert(villas::jansson::unpackable<User>);
  *
  *
- * The whole wrapper is implemented using inline header functions. You only need to link libjansson.
- * You should probably move most jsonPack/jsonUnpack implementations to source files to only generate
- * and compile the templated packing/unpacking code once.
- *
- *
  * Author: Philipp Jungkamp <philipp@jungkamp.dev>
  * SPDX-FileCopyrightText: 2026 Institute for Automation of Complex Power Systems, RWTH Aachen University
  * SPDX-License-Identifier: Apache-2.0
@@ -107,22 +102,17 @@
 #include <complex>
 #include <concepts>
 #include <exception>
-#include <filesystem>
 #include <initializer_list>
-#include <iterator>
+#include <iterator> // std::iterator_*_tag
 #include <optional>
 #include <source_location>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
-#include <fmt/format.h>
+#include <jansson.h>
 
 #include <villas/non_null.hpp>
-
-extern "C" {
-#include <jansson.h>
-}
 
 namespace villas::jansson {
 
@@ -130,64 +120,17 @@ using type_t = json_type;
 using int_t = json_int_t;
 using error_code_t = enum json_error_code;
 
-std::string_view typeToString(type_t type);
-
-class bad_access final : public std::exception {
-public:
-  bad_access(type_t expected, type_t found)
-      : bad_access(typeToString(expected), typeToString(found)) {}
-
-  bad_access(std::string_view expected, std::string_view found)
-      : message(fmt::format("expected JSON {} but found {}", expected, found)) {
-  }
-
-  char const *what() const noexcept override { return message.c_str(); }
-
-private:
-  std::string message;
-};
-
-class internal_error final : public std::exception {
-public:
-  internal_error(std::source_location src = std::source_location::current())
-      : message(fmt::format("internal error in {}", src.function_name())) {}
-
-  static void
-  check(int ret, std::source_location src = std::source_location::current()) {
-    if (ret == -1)
-      throw internal_error{src};
-  }
-
-  template <typename T>
-  static non_null<T>
-  check(T *ptr, std::source_location src = std::source_location::current()) {
-    if (ptr == nullptr)
-      throw internal_error{src};
-    else
-      return non_null{*ptr};
-  }
-
-  char const *what() const noexcept override { return message.c_str(); }
-
-private:
-  std::string message;
-};
-
-class parse_error final : public std::exception {
-public:
-  parse_error(json_error_t const &err) : error(err) {}
-  json_error_t const &operator*() const { return error; }
-  json_error_t const *operator->() const { return &error; }
-  char const *what() const noexcept override { return error.text; }
-
-private:
-  json_error_t error;
-};
-
+// wrapper types
 class Value;
 class Object;
 class Array;
 
+// exceptions
+class error_context;
+class bad_access;
+class internal_error;
+
+std::string_view typeToString(type_t type);
 Value object();
 Value array();
 Value string(std::string_view);
@@ -206,8 +149,8 @@ public:
   Value &operator=(Value &&other) noexcept;
   ~Value() noexcept;
 
-  Value copy();
-  Value deepCopy();
+  Value copy() const;
+  Value deepCopy() const;
 
   static Value fromString(std::string_view string, std::size_t flags = 0);
   std::string toString(std::size_t flags = 0) const;
@@ -218,10 +161,8 @@ public:
   static Value loadFromFileDescriptor(int fd, std::size_t flags = 0);
   void dumpToFileDescriptor(int fd, std::size_t flags = 0) const;
 
-  static Value loadFromFilePath(std::filesystem::path const &path,
-                                std::size_t flags = 0);
-  void dumpToFilePath(std::filesystem::path const &path,
-                      std::size_t flags = 0) const;
+  static Value loadFromFilePath(char const *path, std::size_t flags = 0);
+  void dumpToFilePath(char const *path, std::size_t flags = 0) const;
 
   template <typename Callback>
   static Value loadWithCallback(Callback cb, std::size_t flags = 0);
@@ -283,6 +224,8 @@ public:
   using Entry = std::pair<std::string_view, Value>;
 
   Object() = default;
+  Object copy() const;
+  Object deepCopy() const;
 
   explicit Object(Value const &value);
   explicit Object(Value &&value);
@@ -310,38 +253,36 @@ public:
   void updateMissing(Object const &other);
   void updateMissing(Object &&other);
 
-  using Sentinel = std::default_sentinel_t;
-  class Iterator {
+  using sentinel = std::default_sentinel_t;
+  class iterator {
   public:
     using iterator_category = std::forward_iterator_tag;
     using difference_type = std::ptrdiff_t;
     using value_type = Entry;
 
-    Iterator() = default;
+    iterator() = default;
 
-    explicit Iterator(Object const &obj) noexcept;
+    explicit iterator(Object const &obj) noexcept;
 
     value_type operator*() const noexcept;
-    Iterator &operator++() noexcept;
-    Iterator operator++(int) noexcept;
+    iterator &operator++() noexcept;
+    iterator operator++(int) noexcept;
 
-    friend bool operator==(Iterator const &,
-                           Iterator const &) noexcept = default;
-    friend bool operator==(Iterator const &iterator, Sentinel) noexcept;
+    friend bool operator==(iterator const &,
+                           iterator const &) noexcept = default;
+    friend bool operator==(iterator const &iterator, sentinel) noexcept;
 
   private:
     json_t *obj = nullptr;
     void *iter = nullptr;
   };
 
-  Iterator begin() const noexcept;
-  Sentinel end() const noexcept;
+  iterator begin() const noexcept;
+  sentinel end() const noexcept;
 
-  template <typename T>
-    requires std::is_reference_v<T>
-  struct Binding {
+  template <typename T> struct Binding {
     std::string_view name;
-    T value;
+    T &&value;
     bool required;
   };
 
@@ -362,32 +303,25 @@ private:
   Value inner = object();
 };
 
-// create an Object::Binding for Object::pack and Object::unpack.
-template <typename T>
-inline auto binding(std::string_view key, T &&value, bool required) {
-  if constexpr (std::is_rvalue_reference_v<T &&>)
-    return Object::Binding<T const &>{key, value, required};
-  else
-    return Object::Binding<T &>{key, value, required};
-}
-
 // create a *required* Object::Binding for Object::pack and Object::unpack.
 //
 // this is an alias for jansson::bind with required = true
 template <typename T> inline auto required(std::string_view key, T &&value) {
-  return binding(key, std::forward<T>(value), true);
+  return Object::Binding<T>{key, std::forward<T>(value), true};
 }
 
 // create an *optional* Object::Binding for Object::pack and Object::unpack.
 //
 // this is an alias for jansson::bind with required = false
 template <typename T> inline auto optional(std::string_view key, T &&value) {
-  return binding(key, std::forward<T>(value), false);
+  return Object::Binding<T>{key, std::forward<T>(value), false};
 }
 
 class Array {
 public:
   Array() = default;
+  Array copy() const;
+  Array deepCopy() const;
 
   explicit Array(Value const &value);
   explicit Array(Value &&value);
@@ -412,44 +346,74 @@ public:
   void clear(std::size_t index);
   void extend(Array const &other);
 
-  class Iterator {
+  class iterator {
   public:
     using iterator_category = std::random_access_iterator_tag;
     using difference_type = std::ptrdiff_t;
     using value_type = Value;
 
-    Iterator() = default;
+    iterator() = default;
 
-    explicit Iterator(Array const &arr, std::size_t start) noexcept;
+    explicit iterator(Array const &arr, std::size_t start) noexcept;
 
     Value operator*() const noexcept;
     Value operator[](difference_type n) const noexcept;
-    Iterator &operator++() noexcept;
-    Iterator operator++(int) noexcept;
-    Iterator &operator--() noexcept;
-    Iterator operator--(int) noexcept;
-    Iterator &operator+=(difference_type n) noexcept;
-    Iterator &operator-=(difference_type n) noexcept;
+    iterator &operator++() noexcept;
+    iterator operator++(int) noexcept;
+    iterator &operator--() noexcept;
+    iterator operator--(int) noexcept;
+    iterator &operator+=(difference_type n) noexcept;
+    iterator &operator-=(difference_type n) noexcept;
 
-    friend Iterator operator+(Iterator iter, difference_type n) noexcept;
-    friend Iterator operator+(difference_type n, Iterator iter) noexcept;
-    friend Iterator operator-(Iterator iter, difference_type n) noexcept;
-    friend difference_type operator-(Iterator const &lhs,
-                                     Iterator const &rhs) noexcept;
-    friend std::partial_ordering operator<=>(Iterator const &lhs,
-                                             Iterator const &rhs) noexcept;
-    friend bool operator==(Iterator const &lhs, Iterator const &rhs) noexcept;
+    friend iterator operator+(iterator iter, difference_type n) noexcept;
+    friend iterator operator+(difference_type n, iterator iter) noexcept;
+    friend iterator operator-(iterator iter, difference_type n) noexcept;
+    friend difference_type operator-(iterator const &lhs,
+                                     iterator const &rhs) noexcept;
+    friend std::partial_ordering operator<=>(iterator const &lhs,
+                                             iterator const &rhs) noexcept;
+    friend bool operator==(iterator const &lhs, iterator const &rhs) noexcept;
 
   private:
     json_t *arr;
     std::size_t index;
   };
 
-  Iterator begin() const noexcept;
-  Iterator end() const noexcept;
+  iterator begin() const noexcept;
+  iterator end() const noexcept;
 
 private:
   Value inner = array();
+};
+
+class bad_access final : public std::exception {
+public:
+  bad_access(type_t expected, type_t found);
+  bad_access(std::string_view expected, std::string_view found);
+  char const *what() const noexcept override;
+
+private:
+  std::string message;
+};
+
+class internal_error final : public std::exception {
+public:
+  internal_error(std::source_location src = std::source_location::current());
+  char const *what() const noexcept override;
+
+private:
+  std::string message;
+};
+
+class parse_error final : public std::exception {
+public:
+  parse_error(json_error_t const &err);
+  json_error_t const &operator*() const;
+  json_error_t const *operator->() const;
+  char const *what() const noexcept override;
+
+private:
+  json_error_t error;
 };
 
 void jsonUnpack(Value &v, Value const &value);
@@ -470,8 +434,13 @@ Value jsonPack(std::string const &s);
 void jsonUnpack(bool &b, Value const &value);
 Value jsonPack(bool const &b);
 
-template <std::integral T> void jsonUnpack(T &i, Value const &value);
-template <std::integral T> Value jsonPack(T const &i);
+// a more strict version of std::integral matching the requirements for std::in_range
+template <typename T>
+concept integral_strict =
+    std::integral<T> and requires { std::in_range<T>(0); };
+
+template <integral_strict T> void jsonUnpack(T &i, Value const &value);
+template <integral_strict T> Value jsonPack(T const &i);
 
 template <std::floating_point T> void jsonUnpack(T &f, Value const &value);
 template <std::floating_point T> Value jsonPack(T const &f);
@@ -524,39 +493,70 @@ template <map_like T> void jsonUnpack(T &, Value const &);
 template <map_like T> Value jsonPack(T const &);
 
 template <typename T>
-concept unpackable = requires(T &t, Value const &v) {
-  { jsonUnpack(t, v) } -> std::same_as<void>;
-};
+concept unpackable =
+    (not std::is_const_v<T>) and requires(T &t, Value const &v) {
+      { jsonUnpack(t, v) } -> std::same_as<void>;
+    };
 
 template <typename T>
 concept packable = requires(T const &t) {
   { jsonPack(t) } -> std::same_as<Value>;
 };
 
-struct unpack_t {
+class unpack_fn {
+public:
   template <unpackable T> void operator()(T &t, Value const &value) const {
     jsonUnpack(t, value);
   }
-};
-constexpr static unpack_t unpack{};
 
-template <unpackable T>
-  requires std::is_default_constructible_v<T>
-struct make_t {
-  T operator()(Value const &value) const {
-    auto t = T{};
+  template <unpackable T>
+  void operator()(T &t, Value const &value, std::string_view object_key) const {
+    // TODO: add try-catch which adds the object_key as context to the exception
     jsonUnpack(t, value);
-    return t;
+  }
+
+  template <unpackable T>
+  void operator()(T &t, Value const &value, std::size_t array_index) const {
+    // TODO: add try-catch which adds the array_index as context to the exception
+    jsonUnpack(t, value);
   }
 };
-template <unpackable T> constexpr static make_t<T> make{};
 
-struct pack_t {
+constexpr inline unpack_fn unpack;
+
+class pack_fn {
+public:
   template <packable T> Value operator()(T const &t) const {
     return jsonPack(t);
   }
+
+  template <packable T>
+  Value operator()(T const &t, std::string_view object_key) const {
+    // TODO: add try-catch which adds the object_key as context to the exception
+    return jsonPack(t);
+  }
+
+  template <packable T>
+  Value operator()(T const &t, std::size_t array_index) const {
+    // TODO: add try-catch which add the array_index as context to the exception
+    return jsonPack(t);
+  }
 };
-constexpr static pack_t pack{};
+
+constexpr inline pack_fn pack;
+
+template <unpackable T>
+  requires std::is_default_constructible_v<T>
+class make_fn {
+public:
+  T operator()(Value const &value) const {
+    T t{};
+    unpack(t, value);
+    return t;
+  }
+};
+
+template <unpackable T> constexpr inline make_fn<T> make;
 
 } // namespace villas::jansson
 
