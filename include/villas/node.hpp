@@ -7,7 +7,9 @@
 
 #pragma once
 
+#include <functional>
 #include <iostream>
+#include <map>
 #include <optional>
 
 #include <fmt/ostream.h>
@@ -70,6 +72,12 @@ public:
   PathDestinationList
       destinations; // A list of path destinations which reference this node.
   std::string configPath;
+
+  /* Callbacks which reconfigure a part of this node at runtime.
+   *
+   * Each callback is keyed by the JsonPointer of the configuration subtree it
+   * is responsible for and receives that subtree's new value. */
+  std::map<JsonPointer, std::function<void(Json)>> reconfiguration_callbacks;
 
 #ifdef __linux__
   int fwmark; // Socket mark for netem, routing and filtering
