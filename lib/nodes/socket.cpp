@@ -184,11 +184,7 @@ static int socket_bind(NodeCompat *n, Socket *s);
 static int socket_connect(NodeCompat *n, Socket *s);
 static void socket_tcp_connection(NodeCompat *n, Socket *s);
 
-/* Replace the socket descriptor while keeping its number stable.
- *
- * The number is handed out via Node::getPollFDs() and cached by the paths and
- * by the network emulation, so it must not change across a reconfiguration.
- */
+// Replace the socket descriptor while keeping its number stable.
 static void socket_replace(NodeCompat *n, Socket *s, int sd) {
   if (dup2(sd, s->sd) < 0) {
     ::close(sd);
@@ -197,8 +193,6 @@ static void socket_replace(NodeCompat *n, Socket *s, int sd) {
 
   ::close(sd);
 
-  /* A blocked poll(2) still operates on the old socket. Interrupt it so that
-   * it picks up the replacement. */
   for (auto ps : n->sources)
     ps->getPath()->repoll();
 }
@@ -214,26 +208,17 @@ static void socket_resolve_address(Socket *s, union sockaddr_union *saddr,
                       in ? "local" : "remote", address, gai_strerror(ret));
 }
 
-/* Rebind the socket to a new local address.
- *
- * The receive binding is fixed at socket creation, so this needs a fresh
- * socket. It is dup2()'ed onto the existing descriptor to keep the descriptor
- * number stable, since it is handed out via Node::getPollFDs() and cached by
- * the paths and the network emulation. The send path is not affected.
- */
 static void socket_reconfigure_in_address(NodeCompat *n, Json const &json) {
   auto *s = n->getData<struct Socket>();
 
   socket_resolve_address(s, &s->in.saddr, true, json);
 
-  /* A TCP client never binds. Its local address only selects the address
-   * family, which is fixed once the socket exists. */
+  // A TCP client never binds.
   if (s->layer == SocketLayer::TCP_CLIENT or n->getState() != State::STARTED)
     return;
 
   socket_replace(n, s, socket_bind(n, s));
 
-  // A TCP server has to listen and accept again on the new binding.
   if (s->layer == SocketLayer::TCP_SERVER) {
     if (s->clt_sd >= 0)
       ::close(s->clt_sd);
@@ -243,13 +228,6 @@ static void socket_reconfigure_in_address(NodeCompat *n, Json const &json) {
   }
 }
 
-/* Change the remote address.
- *
- * For the datagram layers this is only the destination argument of sendto()
- * and for a TCP server only used by verify_source, so no socket is touched.
- * A TCP client has to reconnect, which unavoidably affects both directions
- * since they share one connection.
- */
 static void socket_reconfigure_out_address(NodeCompat *n, Json const &json) {
   auto *s = n->getData<struct Socket>();
 
@@ -274,8 +252,6 @@ int villas::node::socket_prepare(NodeCompat *n) {
   return 0;
 }
 
-// Create, configure and bind a socket for receiving on Socket::in::saddr.
-//
 // Returns a new socket descriptor. The caller owns it.
 static int socket_bind(NodeCompat *n, Socket *s) {
   int ret;
@@ -475,10 +451,7 @@ int villas::node::socket_stop(NodeCompat *n) {
   return 0;
 }
 
-/* Connect a new socket to Socket::out::saddr.
- *
- * Returns a new socket descriptor. The caller owns it.
- */
+// Returns a new socket descriptor. The caller owns it.
 static int socket_connect(NodeCompat *n, Socket *s) {
   int ret = -1;
 

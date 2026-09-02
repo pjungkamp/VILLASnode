@@ -80,8 +80,6 @@ void *Path::runPoll() {
 
     logger->debug("Returned from poll(2): ret={}", ret);
 
-    /* A node replaced one of its descriptors. Restart poll(2) so that it
-     * operates on the new ones. */
     if (pfds.back().revents & POLLIN) {
       uint64_t cntr;
       if (read(notify_fd, &cntr, sizeof(cntr)) < 0)
@@ -163,10 +161,7 @@ void Path::startPoll() {
     pfds.push_back(pfd);
   }
 
-  /* We use the last slot for the notification eventfd.
-   *
-   * It has to stay behind the sources, since runPoll() maps the index of a
-   * pollfd onto Path::sources. */
+  // We use the last slot for the notification eventfd
   pfds.push_back({.fd = notify_fd, .events = POLLIN});
 }
 

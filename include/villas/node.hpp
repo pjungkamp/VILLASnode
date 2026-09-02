@@ -73,10 +73,7 @@ public:
       destinations; // A list of path destinations which reference this node.
   std::string configPath;
 
-  /* Callbacks which reconfigure a part of this node at runtime.
-   *
-   * Each callback is keyed by the JsonPointer of the configuration subtree it
-   * is responsible for and receives that subtree's new value. */
+  // Callbacks which reconfigure a part of this node at runtime.
   std::map<JsonPointer, std::function<void(Json)>> reconfiguration_callbacks;
 
 #ifdef __linux__

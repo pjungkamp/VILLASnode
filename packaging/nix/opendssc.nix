@@ -13,6 +13,8 @@
 gcc14Stdenv.mkDerivation {
   pname = "opendssc";
   version = "10.1.0.1";
+  structuredAttrs = true;
+  strictDeps = true;
 
   src = fetchsvn {
     url = "https://svn.code.sf.net/p/electricdss/code/trunk/VersionC";

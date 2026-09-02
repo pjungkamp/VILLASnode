@@ -37,7 +37,6 @@ public:
       if (body != nullptr)
         throw Error::badRequest(nullptr, "Found non-empty body on GET request");
 
-      // Report the current value of every reconfigurable setting.
       auto reconfigurable = Json::object();
       for (auto const &[ptr, callback] : node->reconfiguration_callbacks)
         reconfigurable[ptr.to_string()] =
@@ -135,7 +134,7 @@ public:
       }
     }
 
-    return Response::json(HTTP_STATUS_OK, config);
+    return Response(HTTP_STATUS_OK);
   }
 };
 

@@ -104,7 +104,8 @@ gcc14Stdenv.mkDerivation {
     "out"
     "dev"
   ];
-  enableParallelBuilding = true;
+  structuredAttrs = true;
+  strictDeps = true;
   separateDebugInfo = true;
   cmakeFlags =
     [ ]
